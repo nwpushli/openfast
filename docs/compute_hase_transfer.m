@@ -1,38 +1,34 @@
 function [Hase, G, sys, omega, inputIdx, outputIdx] = compute_hase_transfer(A, B, C, D, varargin)
-%COMPUTE_HASE_TRANSFER Assemble OpenFAST linear models and evaluate H_ase(j*omega).
+%COMPUTE_HASE_TRANSFER 组装 OpenFAST 线性模型并计算 H_ase(j*omega)。
 %   [HASE, G, SYS, OMEGA, INPUTIDX, OUTPUTIDX] = COMPUTE_HASE_TRANSFER(A, B, C, D)
-%   builds the state-space system defined by the linearized OpenFAST matrices and returns
-%   its frequency-response matrix. Optional name-value arguments let you pick specific
-%   input/output channels and define the frequency grid.
+%   会根据 OpenFAST 线性化得到的状态空间矩阵生成系统模型，并返回频率响应矩阵。
+%   通过名称-数值对参数可以筛选指定的输入/输出通道，并设置频率点。
 %
-%   Required inputs:
-%     A,B,C,D     - Continuous-time state, input, output, and feedthrough matrices taken
-%                   from an OpenFAST linearization.
+%   必选输入参数：
+%     A,B,C,D     - OpenFAST 线性化输出的连续时间状态、输入、输出与旁路矩阵。
 %
-%   Name-value arguments:
-%     'Inputs'            : Indices or names of input channels to retain (default: all).
-%     'Outputs'           : Indices or names of output channels to retain (default: all).
-%     'InputDescriptions' : Cell array of character vectors describing each input (as
-%                           provided by FASTLinearizationFile.udescr()). Needed when
-%                           selecting inputs by name.
-%     'OutputDescriptions': Cell array of character vectors describing each output (from
-%                           FASTLinearizationFile.ydescr()). Needed when selecting outputs
-%                           by name.
-%     'Frequencies'       : Vector of frequencies (rad/s) at which to evaluate H_ase.
-%     'FrequencySpan'     : Two-element vector [wMin wMax] (rad/s). Used to generate a
-%                           logarithmic grid when 'Frequencies' is omitted. Defaults to a
-%                           span inferred from the eigenvalues of A.
-%     'NumFrequencyPoints': Number of points in the generated frequency grid (default 200).
+%   名称-数值对参数：
+%     'Inputs'            : 要保留的输入通道索引或名称（默认保留全部）。
+%     'Outputs'           : 要保留的输出通道索引或名称（默认保留全部）。
+%     'InputDescriptions' : 输入通道的描述字符串（如 FASTLinearizationFile.udescr()）。
+%                           当通过名称选择输入通道时需要提供。
+%     'OutputDescriptions': 输出通道的描述字符串（如 FASTLinearizationFile.ydescr()）。
+%                           当通过名称选择输出通道时需要提供。
+%     'Frequencies'       : 指定的角频率向量（单位 rad/s），用于计算 H_ase。
+%     'FrequencySpan'     : 长度为 2 的向量 [wMin wMax]（单位 rad/s），在未指定
+%                           'Frequencies' 时用于自动生成对数频率网格，范围默认为
+%                           根据 A 的特征值估计得到。
+%     'NumFrequencyPoints': 自动生成频率网格时的点数（默认 200）。
 %
-%   Outputs:
-%     Hase      - ny-by-nu-by-nw array containing the complex frequency response values.
-%     G         - Transfer-function model (Control System Toolbox TF object).
-%     sys       - State-space model (SS object) constructed from the selected channels.
-%     omega     - Column vector of frequencies (rad/s) used for the evaluation.
-%     inputIdx  - Numeric indices of the retained input channels.
-%     outputIdx - Numeric indices of the retained output channels.
+%   输出参数：
+%     Hase      - ny×nu×nw 的复数频率响应数组。
+%     G         - 控制系统工具箱的传递函数对象。
+%     sys       - 选定通道构成的状态空间对象。
+%     omega     - 计算时使用的角频率列向量（单位 rad/s）。
+%     inputIdx  - 保留下来的输入通道索引。
+%     outputIdx - 保留下来的输出通道索引。
 %
-%   Example:
+%   使用示例：
 %     file = FASTLinearizationFile('MyTurbine.1.lin');
 %     [Hase, ~, sys, omega] = compute_hase_transfer(file.A, file.B, file.C, file.D, ...
 %         'Inputs', {'HWindSpeed'}, 'Outputs', {'TwrBsFys'}, ...
@@ -40,9 +36,9 @@ function [Hase, G, sys, omega, inputIdx, outputIdx] = compute_hase_transfer(A, B
 %         'FrequencySpan', [0.01 10]);
 %     bode(sys, omega);
 %
-%   Requires MATLAB Control System Toolbox.
+%   需要 MATLAB 控制系统工具箱。
 %
-%   See also FASTLINEARIZATIONFILE, SS, TF, FREQRESP, BODE, LSIM.
+%   相关函数：FASTLINEARIZATIONFILE，SS，TF，FREQRESP，BODE，LSIM。
 
 arguments
     A double
@@ -67,7 +63,7 @@ addParameter(p, 'NumFrequencyPoints', 200, @(x) isnumeric(x) && isscalar(x) && x
 parse(p, varargin{:});
 opts = p.Results;
 
-% Basic dimension checks
+% 基本维度检查
 [nx, nAcols] = size(A);
 if nAcols ~= nx
     error('Matrix A must be square.');
@@ -81,7 +77,7 @@ if nBrows ~= nx || nCcols ~= nx || nDrows ~= nCrows || nDcols ~= nu
     error('Inconsistent matrix dimensions.');
 end
 
-% Resolve channel selections
+% 解析输入/输出通道选择
 inputIdx = resolve_selection(opts.Inputs, nu, opts.InputDescriptions, 'input');
 if isempty(inputIdx)
     inputIdx = 1:nu;
@@ -92,22 +88,22 @@ if isempty(outputIdx)
     outputIdx = 1:nCrows;
 end
 
-% Extract the sub-model
+% 提取选定通道的子模型
 Bsel = B(:, inputIdx);
 Csel = C(outputIdx, :);
 Dsel = D(outputIdx, inputIdx);
 
-% Assemble state-space and transfer-function objects
+% 构建状态空间对象与传递函数对象
 sys = ss(A, Bsel, Csel, Dsel);
 G = tf(sys);
 
-% Determine the evaluation frequencies
+% 确定需要计算的频率点
 omega = prepare_frequency_grid(A, opts.Frequencies, opts.FrequencySpan, opts.NumFrequencyPoints);
 
-% Evaluate frequency response (Control System Toolbox)
+% 调用控制系统工具箱计算频率响应
 Hase = freqresp(sys, omega.');
 
-% Return omega as a column vector
+% 将角频率转换为列向量
 omega = omega(:);
 
 end
