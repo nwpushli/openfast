@@ -27,6 +27,9 @@ lin = FASTLinearizationFile(fullfile(rootPath, 'build', 'MyTurbine.1.lin'));
     'Inputs', {'HWindSpeed'}, 'Outputs', {'TwrBsFys'}, ...
     'InputDescriptions', lin.udescr(), 'OutputDescriptions', lin.ydescr(), ...
     'FrequencySpan', [0.1 5]);
+
+% compute_hase_transfer 会对名称做大小写与符号无关的匹配，
+% 例如 "HWindSpeed" 也能匹配 "HWindSpeed-WS_[m/s]" 这类完整描述。
 ```
 
 如需查看原始描述，可访问 `lin.u_info.Description`、`lin.y_info.Description` 等字段；

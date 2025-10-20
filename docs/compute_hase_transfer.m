@@ -135,15 +135,67 @@ function idx = resolve_selection(selection, nAvailable, descriptors, kind)
         selection = cellstr(string(selection));
     end
 
+    sanitizedDescriptors = sanitize_tokens(descriptors);
+
     idx = zeros(1, numel(selection));
     for ii = 1:numel(selection)
-        match = find(strcmpi(strtrim(selection{ii}), strtrim(descriptors)), 1);
+        token = strtrim(selection{ii});
+        sanitizedToken = sanitize_tokens(token);
+
+        % 1) 先尝试与描述的完整字符串精确匹配
+        match = find(strcmpi(token, strtrim(descriptors)), 1);
+
+        % 2) 再尝试使用无符号、无空格的小写形式匹配
         if isempty(match)
-            error('未能找到名为 "%s" 的 %s 通道。', selection{ii}, kind);
+            match = find(strcmp(sanitizedToken, sanitizedDescriptors), 1);
         end
+
+        % 3) 最后尝试模糊匹配：检查是否为描述的子串或反之
+        if isempty(match)
+            containsMask = contains(sanitizedDescriptors, sanitizedToken);
+            if sum(containsMask) == 1
+                match = find(containsMask, 1);
+            elseif sum(containsMask) > 1
+                error(['名称 "%s" 匹配到了多个 %s 通道：%s。', ...
+                    ' 请提供更精确的名称或使用索引。'], token, kind, ...
+                    strjoin(descriptors(containsMask), ', '));
+            end
+        end
+
+        if isempty(match)
+            availablePreview = strjoin(descriptors(1:min(numel(descriptors), 5)), ', ');
+            error(['未能找到名为 "%s" 的 %s 通道。', ...
+                ' 可用通道示例：%s%s'], token, kind, availablePreview, ...
+                ternary(numel(descriptors) > 5, ' ...', ''));
+        end
+
         idx(ii) = match;
     end
     idx = unique(idx, 'stable');
+end
+
+function tokens = sanitize_tokens(strs)
+    if iscell(strs)
+        tokens = cell(size(strs));
+        for i = 1:numel(strs)
+            tokens{i} = sanitize_tokens(strs{i});
+        end
+        return;
+    end
+    strs = string(strs);
+    tokens = regexprep(lower(strs), '[^a-z0-9]', '');
+    tokens = cellstr(tokens);
+    if numel(tokens) == 1
+        tokens = tokens{1};
+    end
+end
+
+function out = ternary(cond, a, b)
+    if cond
+        out = a;
+    else
+        out = b;
+    end
 end
 
 %--------------------------------------------------------------------------
