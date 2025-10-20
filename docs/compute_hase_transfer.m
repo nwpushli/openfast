@@ -1,108 +1,183 @@
-function [Hase, G, sys] = compute_hase_transfer(A, B, C, D, inputChannels, outputChannels, omega)
-%COMPUTE_HASE_TRANSFER Compute frequency-domain transfer function from ABCD matrices.
-%   [HASE, G, SYS] = COMPUTE_HASE_TRANSFER(A, B, C, D, INPUTCHANNELS, OUTPUTCHANNELS, OMEGA)
-%   builds the state-space model defined by the linearized OpenFAST matrices and returns
-%   the multi-input multi-output transfer function values between the selected channels.
+function [Hase, G, sys, omega, inputIdx, outputIdx] = compute_hase_transfer(A, B, C, D, varargin)
+%COMPUTE_HASE_TRANSFER Assemble OpenFAST linear models and evaluate H_ase(j*omega).
+%   [HASE, G, SYS, OMEGA, INPUTIDX, OUTPUTIDX] = COMPUTE_HASE_TRANSFER(A, B, C, D)
+%   builds the state-space system defined by the linearized OpenFAST matrices and returns
+%   its frequency-response matrix. Optional name-value arguments let you pick specific
+%   input/output channels and define the frequency grid.
 %
-%   INPUTS:
-%     A, B, C, D         - Linearized system matrices from an OpenFAST .lin file.
-%     inputChannels     - Vector of indices selecting which input channels to keep. These
-%                         indices correspond to the order returned by FASTLinearizationFile.udescr().
-%     outputChannels    - Vector of indices selecting which outputs to observe. These indices
-%                         correspond to FASTLinearizationFile.ydescr().
-%     omega             - Column vector of frequencies (rad/s) at which to evaluate the
-%                         frequency response. If empty or omitted, a logarithmic grid spanning
-%                         the system dynamics is generated automatically.
+%   Required inputs:
+%     A,B,C,D     - Continuous-time state, input, output, and feedthrough matrices taken
+%                   from an OpenFAST linearization.
 %
-%   OUTPUTS:
-%     Hase - 3-D array of complex frequency-response values with dimensions
-%            [numOutputs x numInputs x numFrequencies]. For SISO selections, use squeeze(Hase)
-%            to obtain a row vector over omega.
-%     G    - Transfer function model (TF object) of the selected channels.
-%     SYS  - State-space model (SS object) of the selected channels.
+%   Name-value arguments:
+%     'Inputs'            : Indices or names of input channels to retain (default: all).
+%     'Outputs'           : Indices or names of output channels to retain (default: all).
+%     'InputDescriptions' : Cell array of character vectors describing each input (as
+%                           provided by FASTLinearizationFile.udescr()). Needed when
+%                           selecting inputs by name.
+%     'OutputDescriptions': Cell array of character vectors describing each output (from
+%                           FASTLinearizationFile.ydescr()). Needed when selecting outputs
+%                           by name.
+%     'Frequencies'       : Vector of frequencies (rad/s) at which to evaluate H_ase.
+%     'FrequencySpan'     : Two-element vector [wMin wMax] (rad/s). Used to generate a
+%                           logarithmic grid when 'Frequencies' is omitted. Defaults to a
+%                           span inferred from the eigenvalues of A.
+%     'NumFrequencyPoints': Number of points in the generated frequency grid (default 200).
 %
-%   EXAMPLE:
-%     % Load matrices from a .mat file exported from FASTLinearizationFile
-%     load('5MW_linear_model.mat', 'A', 'B', 'C', 'D', 'u_desc', 'y_desc');
-%     windInput = find(strcmp(u_desc, 'HWindSpeed'));   % wind-speed input index
-%     towerBaseFy = find(strcmp(y_desc, 'TwrBsFys'));   % tower-base shear force output index
-%     omega = logspace(-2, 2, 200);                     % rad/s grid
-%     [Hase, G] = compute_hase_transfer(A, B, C, D, windInput, towerBaseFy, omega);
-%     bode(G, omega);                                   % plot magnitude/phase
+%   Outputs:
+%     Hase      - ny-by-nu-by-nw array containing the complex frequency response values.
+%     G         - Transfer-function model (Control System Toolbox TF object).
+%     sys       - State-space model (SS object) constructed from the selected channels.
+%     omega     - Column vector of frequencies (rad/s) used for the evaluation.
+%     inputIdx  - Numeric indices of the retained input channels.
+%     outputIdx - Numeric indices of the retained output channels.
 %
-%   This helper follows the workflow described in the fatigue-load estimation paper: it
-%   extracts the subset of inputs/outputs, forms the transfer function H_ase(j*omega), and
-%   evaluates the frequency response on the requested grid. Additional blocks such as the
-%   spectral shaping of wind or wave inputs can be applied by multiplying the resulting
-%   frequency response with the corresponding PSDs.
+%   Example:
+%     file = FASTLinearizationFile('MyTurbine.1.lin');
+%     [Hase, ~, sys, omega] = compute_hase_transfer(file.A, file.B, file.C, file.D, ...
+%         'Inputs', {'HWindSpeed'}, 'Outputs', {'TwrBsFys'}, ...
+%         'InputDescriptions', file.udescr(), 'OutputDescriptions', file.ydescr(), ...
+%         'FrequencySpan', [0.01 10]);
+%     bode(sys, omega);
 %
 %   Requires MATLAB Control System Toolbox.
 %
-%   See also SS, TF, FREQRESP, BODE.
+%   See also FASTLINEARIZATIONFILE, SS, TF, FREQRESP, BODE, LSIM.
 
 arguments
     A double
     B double
     C double
     D double
-    inputChannels (1,:) {mustBeInteger, mustBePositive}
-    outputChannels (1,:) {mustBeInteger, mustBePositive}
-    omega double = []
 end
 
-% Validate dimensions
-nx = size(A, 1);
-nu = size(B, 2);
-ny = size(C, 1);
+arguments (Repeating)
+    varargin
+end
 
-if size(A,2) ~= nx
+p = inputParser;
+p.FunctionName = mfilename;
+addParameter(p, 'Inputs', [], @(x) isnumeric(x) || isstring(x) || ischar(x) || iscellstr(x));
+addParameter(p, 'Outputs', [], @(x) isnumeric(x) || isstring(x) || ischar(x) || iscellstr(x));
+addParameter(p, 'InputDescriptions', {}, @(x) iscellstr(x) || isstring(x));
+addParameter(p, 'OutputDescriptions', {}, @(x) iscellstr(x) || isstring(x));
+addParameter(p, 'Frequencies', [], @(x) isnumeric(x));
+addParameter(p, 'FrequencySpan', [], @(x) isnumeric(x) && numel(x) == 2);
+addParameter(p, 'NumFrequencyPoints', 200, @(x) isnumeric(x) && isscalar(x) && x > 1);
+parse(p, varargin{:});
+opts = p.Results;
+
+% Basic dimension checks
+[nx, nAcols] = size(A);
+if nAcols ~= nx
     error('Matrix A must be square.');
 end
-if size(B,1) ~= nx || size(D,1) ~= ny || size(D,2) ~= nu || size(C,2) ~= nx
-    error('Inconsistent dimensions among A, B, C, D matrices.');
+
+[nBrows, nu] = size(B);
+[nCrows, nCcols] = size(C);
+[nDrows, nDcols] = size(D);
+
+if nBrows ~= nx || nCcols ~= nx || nDrows ~= nCrows || nDcols ~= nu
+    error('Inconsistent matrix dimensions.');
 end
 
-% Ensure channel indices are within bounds
-if any(inputChannels > nu)
-    error('inputChannels index exceeds the number of available inputs (%d).', nu);
-end
-if any(outputChannels > ny)
-    error('outputChannels index exceeds the number of available outputs (%d).', ny);
+% Resolve channel selections
+inputIdx = resolve_selection(opts.Inputs, nu, opts.InputDescriptions, 'input');
+if isempty(inputIdx)
+    inputIdx = 1:nu;
 end
 
-% Extract the selected sub-system
-Bsel = B(:, inputChannels);
-Csel = C(outputChannels, :);
-Dsel = D(outputChannels, inputChannels);
+outputIdx = resolve_selection(opts.Outputs, nCrows, opts.OutputDescriptions, 'output');
+if isempty(outputIdx)
+    outputIdx = 1:nCrows;
+end
 
-% Construct state-space model and equivalent transfer function
+% Extract the sub-model
+Bsel = B(:, inputIdx);
+Csel = C(outputIdx, :);
+Dsel = D(outputIdx, inputIdx);
+
+% Assemble state-space and transfer-function objects
 sys = ss(A, Bsel, Csel, Dsel);
 G = tf(sys);
 
-% Generate a default frequency grid if needed
-if isempty(omega)
-    % Use eigenvalues of A to determine an appropriate span
-    eigVals = eig(A);
-    wn = abs(eigVals(real(eigVals) < 0));
-    if isempty(wn)
-        wn = abs(eigVals);
-    end
-    wn(wn == 0) = [];
-    if isempty(wn)
-        omega = logspace(-2, 2, 200);
-    else
-        wmin = max(min(wn)/10, 1e-4);
-        wmax = max(wn)*10;
-        if wmax <= wmin
-            wmax = wmin*1e3;
-        end
-        omega = logspace(log10(wmin), log10(wmax), 200);
-    end
-else
-    omega = omega(:)';
+% Determine the evaluation frequencies
+omega = prepare_frequency_grid(A, opts.Frequencies, opts.FrequencySpan, opts.NumFrequencyPoints);
+
+% Evaluate frequency response (Control System Toolbox)
+Hase = freqresp(sys, omega.');
+
+% Return omega as a column vector
+omega = omega(:);
+
 end
 
-% Evaluate the frequency response Hase(j*omega)
-Hase = freqresp(sys, omega);
+%--------------------------------------------------------------------------
+function idx = resolve_selection(selection, nAvailable, descriptors, kind)
+    if isnumeric(selection)
+        idx = selection(:).';
+        if any(idx < 1) || any(idx > nAvailable)
+            error('Requested %s index exceeds available channels (%d).', kind, nAvailable);
+        end
+        idx = unique(idx, 'stable');
+        return;
+    end
 
+    if isempty(selection)
+        idx = [];
+        return;
+    end
+
+    descriptors = cellstr(descriptors);
+    if isempty(descriptors)
+        error('Channel names were provided for the %s selection, but no descriptors were supplied.', kind);
+    end
+
+    if ischar(selection) || isstring(selection)
+        selection = cellstr(selection);
+    else
+        selection = cellstr(string(selection));
+    end
+
+    idx = zeros(1, numel(selection));
+    for ii = 1:numel(selection)
+        match = find(strcmpi(strtrim(selection{ii}), strtrim(descriptors)), 1);
+        if isempty(match)
+            error('Unable to find %s channel named "%s".', kind, selection{ii});
+        end
+        idx(ii) = match;
+    end
+    idx = unique(idx, 'stable');
+end
+
+%--------------------------------------------------------------------------
+function omega = prepare_frequency_grid(A, explicit, span, nPoints)
+    if ~isempty(explicit)
+        omega = explicit(:);
+        return;
+    end
+
+    if isempty(span)
+        eigVals = eig(A);
+        eigVals = eigVals(~isnan(eigVals) & ~isinf(eigVals));
+        wn = abs(eigVals);
+        wn(wn == 0) = [];
+        if isempty(wn)
+            span = [1e-3, 1e2];
+        else
+            wmin = max(min(wn)/10, 1e-3);
+            wmax = max(max(wn)*10, wmin*10);
+            span = [wmin, wmax];
+        end
+    else
+        span = sort(abs(span(:).'));
+        if span(1) <= 0
+            span(1) = max(span(2)/1e3, 1e-4);
+        end
+        if span(2) <= span(1)
+            span(2) = span(1) * 10;
+        end
+    end
+
+    omega = logspace(log10(span(1)), log10(span(2)), nPoints).';
 end
