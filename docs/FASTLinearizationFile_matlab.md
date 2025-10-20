@@ -1,45 +1,35 @@
-# 在 MATLAB 中调用 `FASTLinearizationFile`
+# 在 MATLAB 中使用 `FASTLinearizationFile`
 
-`FASTLinearizationFile` 是 OpenFAST 仓库随附的 Python 类，位于 `reg_tests/lib/fast_linearization_file.py`，用于读取线性化生成的 `.lin` 文件。MATLAB 可以通过其内置的 Python 接口直接调用该类，从而在 MATLAB 脚本中获得 `A/B/C/D` 矩阵以及输入输出描述。
+仓库的 `docs/FASTLinearizationFile.m` 提供了 MATLAB 版本的 `FASTLinearizationFile` 类，用于读取 OpenFAST 线性化结果 `.lin` 文件。
+下面给出在 MATLAB 中使用该类的典型步骤。
 
-## 1. 准备 Python 环境
-1. 确认 MATLAB 能够调用 Python (`pyenv` 查看版本)。
-2. 将 OpenFAST 仓库根目录加入 Python 的搜索路径：
-   ```matlab
-   rootPath = 'C:/path/to/openfast';   % 修改为本地仓库路径
-   if count(py.sys.path, rootPath) == 0
-       insert(py.sys.path, int32(0), rootPath);
-   end
-   ```
+## 1. 将工具脚本加入路径
+```matlab
+rootPath = 'C:/path/to/openfast';  % 修改为本地仓库路径
+addpath(fullfile(rootPath, 'docs'));
+```
 
 ## 2. 读取 `.lin` 文件
 ```matlab
-mod = py.importlib.import_module('reg_tests.lib.fast_linearization_file');
-lin = mod.FASTLinearizationFile('MyTurbine.1.lin');
+lin = FASTLinearizationFile(fullfile(rootPath, 'build', 'MyTurbine.1.lin'));
 ```
-`lin` 是一个 Python 字典对象，键名包括 `A`、`B`、`C`、`D`、`x`、`u`、`y` 等。
+读取完成后，线性化矩阵和操作点信息以属性形式存储在对象中：
 
-## 3. 将矩阵转换为 MATLAB 数组
-MATLAB 通过 `double()` 即可把 `numpy.ndarray` 转换为 `double` 类型：
-```matlab
-A = double(lin{'A'});
-B = double(lin{'B'});
-C = double(lin{'C'});
-D = double(lin{'D'});
-```
+- `lin.A`, `lin.B`, `lin.C`, `lin.D`
+- `lin.u`, `lin.y`, `lin.x`, `lin.xdot`
+- `lin.udescr()`, `lin.ydescr()` 用于获取简写后的通道描述。
 
-## 4. 获取输入/输出描述
-```matlab
-uDesc = cellstr(lin.udescr());
-yDesc = cellstr(lin.ydescr());
-```
+## 3. 在 MATLAB 中继续分析
+结合仓库中的 `compute_hase_transfer.m` 可直接建立传递函数或计算频率响应：
 
-## 5. 与 `compute_hase_transfer` 联用示例
 ```matlab
-[Hase, G, sys, omega] = compute_hase_transfer(A, B, C, D, ...
+[Hase, G, sys, omega] = compute_hase_transfer(lin.A, lin.B, lin.C, lin.D, ...
     'Inputs', {'HWindSpeed'}, 'Outputs', {'TwrBsFys'}, ...
-    'InputDescriptions', uDesc, 'OutputDescriptions', yDesc, ...
+    'InputDescriptions', lin.udescr(), 'OutputDescriptions', lin.ydescr(), ...
     'FrequencySpan', [0.1 5]);
 ```
 
-以上步骤即可在 MATLAB 中直接使用 `FASTLinearizationFile` 读取线性化文件，并继续完成传递函数、频率响应等分析。
+如需查看原始描述，可访问 `lin.u_info.Description`、`lin.y_info.Description` 等字段；
+若 `.lin` 文件包含 `dUdu`、`dUdy` 等雅可比矩阵，类也会自动读取并保存在对应属性中。
+
+通过上述步骤，即可在 MATLAB 中无缝读取和使用 OpenFAST 的线性化结果，完成塔底疲劳载荷估算、模态分析或控制设计等任务。
