@@ -66,7 +66,7 @@ opts = p.Results;
 % 基本维度检查
 [nx, nAcols] = size(A);
 if nAcols ~= nx
-    error('Matrix A must be square.');
+    error('矩阵 A 必须为方阵。');
 end
 
 [nBrows, nu] = size(B);
@@ -74,7 +74,7 @@ end
 [nDrows, nDcols] = size(D);
 
 if nBrows ~= nx || nCcols ~= nx || nDrows ~= nCrows || nDcols ~= nu
-    error('Inconsistent matrix dimensions.');
+    error('输入的矩阵维度不一致。');
 end
 
 % 解析输入/输出通道选择
@@ -113,7 +113,7 @@ function idx = resolve_selection(selection, nAvailable, descriptors, kind)
     if isnumeric(selection)
         idx = selection(:).';
         if any(idx < 1) || any(idx > nAvailable)
-            error('Requested %s index exceeds available channels (%d).', kind, nAvailable);
+            error('请求的 %s 索引超出了可用通道数量（%d）。', kind, nAvailable);
         end
         idx = unique(idx, 'stable');
         return;
@@ -126,7 +126,7 @@ function idx = resolve_selection(selection, nAvailable, descriptors, kind)
 
     descriptors = cellstr(descriptors);
     if isempty(descriptors)
-        error('Channel names were provided for the %s selection, but no descriptors were supplied.', kind);
+        error('为 %s 选择提供了通道名称，但未给出通道描述。', kind);
     end
 
     if ischar(selection) || isstring(selection)
@@ -139,7 +139,7 @@ function idx = resolve_selection(selection, nAvailable, descriptors, kind)
     for ii = 1:numel(selection)
         match = find(strcmpi(strtrim(selection{ii}), strtrim(descriptors)), 1);
         if isempty(match)
-            error('Unable to find %s channel named "%s".', kind, selection{ii});
+            error('未能找到名为 "%s" 的 %s 通道。', selection{ii}, kind);
         end
         idx(ii) = match;
     end
